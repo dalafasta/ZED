@@ -1,0 +1,350 @@
+---
+title: "ZED - Raport z analizy danych"
+author: "Adam Gontarek"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+
+1. Biblioteki i konfiguracja:
+```{r libs_opts, results = 'hide', message = FALSE}
+library(dplyr)
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+library(reshape2)
+library(caret)
+library(C50)
+library(corrplot)
+
+#opts_chunk$set(cache = TRUE)
+```
+
+2. Zapewnienie powtarzalności wyników:
+```{r setseed}
+set.seed(23)
+```
+
+3. Wczytanie danych z pliku:
+```{r load_data}
+
+file <- "C:/studia/ZED/zed_projekt_2015-2016_dane/all_summary.txt";
+
+header <- read.table(file, header = FALSE, sep = ";", nrows = 1, stringsAsFactors = FALSE)
+sample <- read.table(file, header = FALSE, sep = ";", col.names = unlist(header), nrows = 5000, skip = 10000, stringsAsFactors = TRUE)
+classes <- sapply(sample, class)
+rm(list = c("sample", "header"))
+
+data <- read.table(file, header = TRUE, sep = ";", comment.char = "", colClasses = classes)
+
+data <- tbl_df(data)
+```
+
+4. Usunięcie wierszy z niepożądanymi wartościami zmiennej res_name:
+```{r filter_res_name}
+
+data <- filter(data, !grepl("DA|DC|DT|DU|DG|DI|UNK|UNX|UNL|PR|PD|Y1|EU|N|15P|UQ|PX4|SO4|NAN",res_name))
+
+data$res_name <- factor(data$res_name)
+```
+
+5. Usunięcie zduplikowanych par wartości (pdb_code, res_name):
+```{r rm_dupl}
+data <- distinct(data, pdb_code, res_name)
+```
+
+6. Krótkie podsumowanie wartości w każdej kolumnie:
+```{r summary}
+kable(summary(data))
+```
+
+7. Sekcje sprawdzającą korelacje między zmiennymi; sekcja ta powinna zawierać jakąś formę graficznej prezentacji korelacji
+```{r 7, fig.height=20, fig.width=20, dpi=144}
+
+# Usuniecie kolumn o stałych wartościach
+constCols <- colnames(data)[sapply(data, function(x) length(unique(na.omit(x)))) <= 1]
+data_7 <- data %>% select(-one_of(constCols))
+
+classes <- sapply(data_7, class)
+notNumeric <- classes[classes != "numeric"]
+
+data_7 <- select(data_7, -one_of(labels(notNumeric)), -matches("part_0[1-9].*"))
+
+data_yellow <- data %>% select(TwoFoFc_mean, TwoFoFc_std, TwoFoFc_square_std, TwoFoFc_min, TwoFoFc_max,Fo_mean, Fo_std, Fo_square_std, Fo_min, Fo_max,FoFc_mean, FoFc_std, FoFc_square_std, FoFc_min, FoFc_max,Fc_mean, Fc_std, Fc_square_std, Fc_min, Fc_max,resolution, TwoFoFc_bulk_mean, TwoFoFc_bulk_std, TwoFoFc_void_mean, TwoFoFc_void_std, TwoFoFc_modeled_mean, TwoFoFc_modeled_std,Fo_bulk_mean, Fo_bulk_std, Fo_void_mean, Fo_void_std, Fo_modeled_mean, Fo_modeled_std,Fc_bulk_mean, Fc_bulk_std, Fc_void_mean, Fc_void_std, Fc_modeled_mean, Fc_modeled_std,FoFc_bulk_mean, FoFc_bulk_std, FoFc_void_mean, FoFc_void_std, FoFc_modeled_mean, FoFc_modeled_std,TwoFoFc_void_fit_binormal_mean1, TwoFoFc_void_fit_binormal_std1, TwoFoFc_void_fit_binormal_mean2, TwoFoFc_void_fit_binormal_std2, TwoFoFc_void_fit_binormal_scale, TwoFoFc_solvent_fit_normal_mean, TwoFoFc_solvent_fit_normal_std)
+
+data_7_yellow <- data_7 %>% select(one_of(colnames(data_yellow)))
+data_7_yellow <- na.omit(data_7_yellow)
+  
+data_7_gr <- data_7 %>% select(-one_of(colnames(data_yellow)))
+data_7_gr <- na.omit(data_7_gr)
+
+corsMatrix_yellow <- cor(data_7_yellow)
+corsMatrix_gr <- cor(data_7_gr)
+
+corrplot(corsMatrix_gr, method="circle")
+corrplot(corsMatrix_yellow, method="circle")
+
+```
+
+8. Liczba przykładów dla każdej z klas:
+```{r table_class}
+sort(table(data$res_name), decreasing=TRUE)
+```
+Dodatkowo istnieje `r sum(is.na(data$res_name))` obserwacji bez przypisanej klasy.
+
+9. Rozkład liczby atomów (local_res_atom_non_h_count) i elektronów (local_res_atom_non_h_electron_sum):
+```{r atom_hist}
+hist_atom <- ggplot(data, aes(x=local_res_atom_non_h_count)) + geom_histogram(binwidth=1, fill="red", colour="black")
+hist_atom
+```
+```{r electron_hist}
+hist_electron <- ggplot(data, aes(x=local_res_atom_non_h_electron_sum)) + geom_histogram(binwidth=6, fill="red", colour="black")
+hist_electron
+```
+
+10. Próba odtworzenia wykresu:
+```{r big_plot, fig.height=8, fig.width=10, dpi=144}
+theme_clear <- theme(axis.ticks=element_blank(),
+                     panel.background=element_blank(),
+                     panel.grid.minor=element_blank(), panel.grid.major=element_blank(), 
+                     axis.text.x=element_blank(), axis.text.y=element_blank(),
+                     axis.title.x=element_blank(), axis.title.y=element_blank())
+               
+
+empty <- ggplot() + geom_point(aes(1,1), colour='white') + theme_clear
+
+scatter <- ggplot(data, aes(local_res_atom_non_h_electron_sum, local_res_atom_non_h_count)) +
+    stat_density2d(geom="tile", aes(fill = ..density..), contour = FALSE )+
+    scale_fill_gradientn(colours=rev(rainbow(500, start=0, end=0.75, alpha=0.5))) +
+    scale_x_continuous(expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0))+
+    theme(
+        panel.grid.minor=element_blank(), panel.grid.major=element_blank(), 
+        axis.title.x=element_blank(), axis.title.y=element_blank(),
+        panel.background=element_rect(fill='white',colour='black'),legend.position = "none")
+
+grid.arrange(
+  hist_electron + scale_x_continuous(expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) + theme_clear, 
+  empty, scatter, 
+  hist_atom + coord_flip() + scale_x_continuous(expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) + theme_clear,
+  ncol=2, nrow=2,widths=c(4,1), heights=c(1,4))
+```
+
+11.1. 10 klas z największą niezgodnością liczby atomów:
+
+```{r diff_atom}
+data_11 <- data %>% 
+    mutate(diff_atom = abs(local_res_atom_non_h_count - dict_atom_non_h_count)) %>% 
+    group_by(res_name) %>%
+    summarize(
+      mean_diff_atom = mean(diff_atom), 
+      min_diff_atom = min(diff_atom),
+      max_diff_atom = max(diff_atom)
+    )
+```
+
+Wg średniej:
+```{r}
+data_11 %>% arrange(desc(mean_diff_atom)) %>% select(res_name, mean_diff_atom) %>% head(10)
+```
+
+Wg min:
+```{r}
+data_11 %>% arrange(desc(min_diff_atom)) %>% select(res_name, min_diff_atom) %>% head(10)
+```
+
+Wg max:
+```{r}
+data_11 %>% arrange(desc(max_diff_atom)) %>% select(res_name, max_diff_atom) %>% head(10)
+```
+
+11.2. 10 klas z największą niezgodnością liczby elektronów:
+```{r diff_electron}
+data_11 <- data %>% 
+    mutate(diff_electron = abs(local_res_atom_non_h_electron_sum - dict_atom_non_h_electron_sum)) %>%
+    group_by(res_name) %>%
+    summarize(
+      mean_diff_electron = mean(diff_electron), 
+      min_diff_electron = min(diff_electron),
+      max_diff_electron = max(diff_electron)
+    )
+```
+
+Wg średniej:
+```{r}
+data_11 %>% arrange(desc(mean_diff_electron)) %>% select(res_name, mean_diff_electron) %>% head(10)
+```
+
+Wg min:
+```{r}
+data_11 %>% arrange(desc(min_diff_electron)) %>% select(res_name, min_diff_electron) %>% head(10)
+```
+
+Wg max:
+```{r}
+data_11 %>% arrange(desc(max_diff_electron)) %>% select(res_name, max_diff_electron) %>% head(10)
+```
+
+12. Rozkład wartości wszystkich kolumn zaczynających się od part_01 z zaznaczeniem średniej wartości:
+
+```{r hists_part_01, fig.height=3}
+
+cols_part_01 <- select(data, matches("part_01.*"))
+
+par(mfrow=c(1,3), las=1)
+
+for(i in 1:ncol(cols_part_01)) {
+  mx <- mean(cols_part_01[[i]], na.rm = TRUE)
+  hist(cols_part_01[[i]], main = paste(colnames(cols_part_01)[i], "\n(avg:", mx, ")", sep=""))
+  abline(v = mx, col = "blue", lwd = 2)
+}
+```
+
+13. Sekcja sprawdzająca czy na podstawie wartości innych kolumn można przewidzieć liczbę elektronów i atomów oraz z jaką dokładnością można dokonać takiej predykcji; trafność regresji powinna zostać oszacowana na podstawie miar R^2 i RMSE.
+
+13.1 Przewidywanie liczby atomow
+
+```{r 13}
+
+data_13 <- data %>% dplyr::select(
+  local_res_atom_non_h_count, 
+  
+  local_volume, local_electrons, local_mean, local_std, local_max, local_skewness, local_parts, #green
+  solvent_mask_count, void_mask_count, modeled_mask_count, solvent_ratio, #green
+  matches("part_00_.*"), #green
+  
+  #yellow
+  TwoFoFc_mean, TwoFoFc_std, TwoFoFc_square_std, TwoFoFc_min, TwoFoFc_max,Fo_mean, Fo_std, Fo_square_std, Fo_min, Fo_max,FoFc_mean, FoFc_std, FoFc_square_std, FoFc_min, FoFc_max,Fc_mean, Fc_std, Fc_square_std, Fc_min, Fc_max,resolution, TwoFoFc_bulk_mean, TwoFoFc_bulk_std, TwoFoFc_void_mean, TwoFoFc_void_std, TwoFoFc_modeled_mean, TwoFoFc_modeled_std,Fo_bulk_mean, Fo_bulk_std, Fo_void_mean, Fo_void_std, Fo_modeled_mean, Fo_modeled_std,Fc_bulk_mean, Fc_bulk_std, Fc_void_mean, Fc_void_std, Fc_modeled_mean, Fc_modeled_std,FoFc_bulk_mean, FoFc_bulk_std, FoFc_void_mean, FoFc_void_std, FoFc_modeled_mean, FoFc_modeled_std,TwoFoFc_void_fit_binormal_mean1, TwoFoFc_void_fit_binormal_std1, TwoFoFc_void_fit_binormal_mean2, TwoFoFc_void_fit_binormal_std2, TwoFoFc_void_fit_binormal_scale, TwoFoFc_solvent_fit_normal_mean, TwoFoFc_solvent_fit_normal_std 
+)
+
+data_13 <- na.omit(data_13)
+
+inTraining <- 
+  createDataPartition(
+    y = data_13$local_res_atom_non_h_count,
+    p = .70,
+    list = FALSE)
+
+trainingDescr <- select(data_13[ inTraining,], -local_res_atom_non_h_count)
+testingDescr <-  select(data_13[ -inTraining,], -local_res_atom_non_h_count)
+trainingClass <- select(data_13[ inTraining,], local_res_atom_non_h_count)
+testingClass <-  select(data_13[ -inTraining,], local_res_atom_non_h_count)
+
+gridCtrl <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3)
+
+rfFit <- train(trainingDescr, 
+               trainingClass$local_res_atom_non_h_count, 
+               method="rf", 
+               metric = "RMSE",
+               minimize = TRUE,
+               trControl = gridCtrl,
+               ntree=20)
+
+getTrainPerf(rfFit)
+
+predictedValues <- predict(rfFit, newdata = testingDescr)
+
+plot(testingClass$local_res_atom_non_h_count, predictedValues)
+
+```
+
+13.2 Przewidywanie liczby elektronow
+
+```{r 13.2}
+
+data_13 <- data %>% dplyr::select(
+  local_res_atom_non_h_electron_sum, 
+  
+  local_volume, local_electrons, local_mean, local_std, local_max, local_skewness, local_parts, #green
+  solvent_mask_count, void_mask_count, modeled_mask_count, solvent_ratio, #green
+  matches("part_00_.*"), #green
+  
+  #yellow
+  TwoFoFc_mean, TwoFoFc_std, TwoFoFc_square_std, TwoFoFc_min, TwoFoFc_max,Fo_mean, Fo_std, Fo_square_std, Fo_min, Fo_max,FoFc_mean, FoFc_std, FoFc_square_std, FoFc_min, FoFc_max,Fc_mean, Fc_std, Fc_square_std, Fc_min, Fc_max,resolution, TwoFoFc_bulk_mean, TwoFoFc_bulk_std, TwoFoFc_void_mean, TwoFoFc_void_std, TwoFoFc_modeled_mean, TwoFoFc_modeled_std,Fo_bulk_mean, Fo_bulk_std, Fo_void_mean, Fo_void_std, Fo_modeled_mean, Fo_modeled_std,Fc_bulk_mean, Fc_bulk_std, Fc_void_mean, Fc_void_std, Fc_modeled_mean, Fc_modeled_std,FoFc_bulk_mean, FoFc_bulk_std, FoFc_void_mean, FoFc_void_std, FoFc_modeled_mean, FoFc_modeled_std,TwoFoFc_void_fit_binormal_mean1, TwoFoFc_void_fit_binormal_std1, TwoFoFc_void_fit_binormal_mean2, TwoFoFc_void_fit_binormal_std2, TwoFoFc_void_fit_binormal_scale, TwoFoFc_solvent_fit_normal_mean, TwoFoFc_solvent_fit_normal_std 
+)
+
+data_13 <- na.omit(data_13)
+
+inTraining <- 
+  createDataPartition(
+    y = data_13$local_res_atom_non_h_electron_sum,
+    p = .70,
+    list = FALSE)
+
+trainingDescr <- select(data_13[ inTraining,], -local_res_atom_non_h_electron_sum)
+testingDescr <-  select(data_13[ -inTraining,], -local_res_atom_non_h_electron_sum)
+trainingClass <- select(data_13[ inTraining,], local_res_atom_non_h_electron_sum)
+testingClass <-  select(data_13[ -inTraining,], local_res_atom_non_h_electron_sum)
+
+gridCtrl <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3)
+
+rfFit <- train(trainingDescr, 
+               trainingClass$local_res_atom_non_h_electron_sum, 
+               method="rf", 
+               metric = "RMSE",
+               minimize = TRUE,
+               trControl = gridCtrl,
+               ntree=20)
+
+getTrainPerf(rfFit)
+
+predictedValues <- predict(rfFit, newdata = testingDescr)
+
+plot(testingClass$local_res_atom_non_h_electron_sum, predictedValues)
+
+```
+
+14. Sekcję próbującą stworzyć klasyfikator przewidujący wartość atrybutu res_name (w tej sekcji należy wykorzystać wiedzę z pozostałych punktów oraz wykonać dodatkowe czynności, które mogą poprawić trafność klasyfikacji); trafność klasyfikacji powinna zostać oszacowana na danych inne niż uczące za pomocą mechanizmu (stratyfikowanej!) oceny krzyżowej lub (stratyfikowanego!) zbioru testowego.
+
+```{r 14}
+
+data_14 <- data %>% dplyr::select(res_name,
+  local_volume, local_electrons, local_mean, local_std, 
+  local_max, local_skewness, local_parts,
+  solvent_mask_count, void_mask_count, modeled_mask_count, solvent_ratio,
+  matches("part_00_.*")
+)
+
+data_14 <- na.omit(data_14)
+
+# odfiltrowanie rzadkich klas
+data_14 %>% group_by(res_name) %>% summarize(length(local_volume))
+df <- (as.data.frame(table(data_14$res_name)) %>% filter(Freq >= 5))$Var1
+df <- as.character(df)
+data_14 <- data_14 %>% filter(res_name %in% df)
+
+data_14$res_name <- factor(data_14$res_name)
+
+inTraining <- 
+  createDataPartition(
+    y = data_14$res_name,
+    p = .70,
+    list = FALSE)
+
+training <- data_14[ inTraining,]
+testing <- data_14[ -inTraining,]
+
+
+gridCtrl <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 1)
+
+rfFit <- train(res_name~., 
+               data=training, 
+               method="rf", 
+               trControl = gridCtrl,
+               ntree=20)
+
+rfClasses <- predict(rfFit, newdata = testing)
+
+confusionMatrix(data = rfClasses, testing$res_name)
+
+```
